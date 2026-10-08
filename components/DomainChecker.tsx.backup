@@ -1,0 +1,415 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import { Loader2, Globe } from "lucide-react";
+import { toast } from "sonner";
+import DomainCheckerResults from "./DomainCheckerResults";
+import DomainCheckerExport from "./DomainCheckerExport";
+
+interface DomainResult {
+  domain: string;
+  valid: boolean;
+  status: "valid" | "invalid" | "timeout" | "error";
+  ssl?: boolean;
+  dns?: boolean;
+  domainAge?: number;
+  registrar?: string;
+  ips?: string[];
+  responseTime?: number;
+  score?: number;
+  errors?: string[];
+  warnings?: string[];
+}
+
+interface DomainCheckerProps {
+  onResults?: (results: DomainResult[]) => void;
+}
+
+export default function DomainChecker({ onResults }: DomainCheckerProps) {
+  const [domains, setDomains] = useState<string>("");
+  const [results, setResults] = useState<DomainResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [debounceTimeout, setDebounceTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [showResults, setShowResults] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Parse domains from textarea
+  const parseDomains = (input: string): string[] => {
+    return input
+      .split(/[,\n]/)
+      .map(domain => domain.trim())
+      .filter(domain => domain.length > 0);
+  };
+
+  // Check domains
+  const checkDomains = async () => {
+    const domainList = parseDomains(domains);
+    
+    if (domainList.length === 0) {
+      toast.error("Please enter at least one domain");
+      return;
+    }
+
+    if (domainList.length > 50) {
+      toast.error("Maximum 50 domains allowed");
+      return;
+    }
+
+    setLoading(true);
+    setShowResults(true);
+
+    try {
+      const response = await fetch("/api/domain-check", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          domains: domainList,
+          checkSsl: true,
+          checkDns: true,
+          checkAge: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to check domains");
+      }
+
+      const data = await response.json();
+      setResults(data.results);
+      onResults?.(data.results);
+
+      // Show summary toast
+      const validDomains = data.results.filter(r => r.valid).length;
+      const invalidDomains = data.results.filter(r => !r.valid).length;
+      
+      if (validDomains > 0 && invalidDomains > 0) {
+        toast(`${validDomains} valid, ${invalidDomains} invalid domains`);
+      } else if (validDomains > 0) {
+        toast(`${validDomains} valid domains found!`);
+      } else {
+        toast(`${invalidDomains} invalid domains found`);
+      }
+
+    } catch (error) {
+      console.error("Domain check error:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to check domains");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Debounced domain checking
+  useEffect(() => {
+    if (debounceTimeout) {
+      clearTimeout(debounceTimeout);
+    }
+
+    if (domains.trim() && !showResults) {
+      const timeoutId = setTimeout(() => {
+        checkDomains();
+      }, 1000);
+      setDebounceTimeout(timeoutId);
+    }
+
+    return () => {
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
+    };
+  }, [domains, showResults]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [domains]);
+
+  const clearResults = () => {
+    setResults([]);
+    setShowResults(false);
+  };
+
+  return (
+    <div className="w-full max-w-4xl mx-auto space-y-6">
+      {/* Input Section */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+        <div className="space-y-4">
+          <div>
+            <label htmlFor="domains" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Enter domains (one per line or comma-separated)
+            </label>
+            <textarea
+              ref={textareaRef}
+              id="domains"
+              value={domains}
+              onChange={(e) => setDomains(e.target.value)}
+              placeholder="example.com&#10;google.com&#10;github.com"
+              className="w-full min-h-[120px] p-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+            />
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {parseDomains(domains).length} domain{parseDomains(domains.length !== 1 ? "s" : "")} entered
+              {parseDomains(domains).length > 50 && " (max 50 allowed)"}
+            </p>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={checkDomains}
+              disabled={loading || !domains.trim()}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors duration-200 flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="animate-spin h-4 w-4" />
+                  Checking...
+                </>
+              ) : (
+                <>
+                  <Globe className="h-4 w-4" />
+                  Check Domains
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Results Section */}
+      {showResults && results.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                Domain Check Results
+              </h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                {results.length} domains checked
+              </p>
+            </div>
+            
+            <DomainCheckerExport results={results} />
+          </div>
+
+          <DomainCheckerResults results={results} onClear={clearResults} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface DomainCheckerProps {
+  onResults?: (results: DomainResult[]) => void;
+}
+
+export default function DomainChecker({ onResults }: DomainCheckerProps) {
+  const [domains, setDomains] = useState<string>("");
+  const [results, setResults] = useState<DomainResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [debounceTimeout, setDebounceTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [showResults, setShowResults] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Parse domains from textarea
+  const parseDomains = (input: string): string[] => {
+    return input
+      .split(/[,\n]/)
+      .map(domain => domain.trim())
+      .filter(domain => domain.length > 0);
+  };
+
+  // Check domains
+  const checkDomains = async () => {
+    const domainList = parseDomains(domains);
+    
+    if (domainList.length === 0) {
+      toast.error("Please enter at least one domain");
+      return;
+    }
+
+    if (domainList.length > 50) {
+      toast.error("Maximum 50 domains allowed");
+      return;
+    }
+
+    setLoading(true);
+    setShowResults(true);
+
+    try {
+      const response = await fetch("/api/domain-check", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          domains: domainList,
+          checkSsl: true,
+          checkDns: true,
+          checkAge: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to check domains");
+      }
+
+      const data = await response.json();
+      setResults(data.results);
+      onResults?.(data.results);
+
+      // Show summary toast
+      const validDomains = data.results.filter(r => r.valid).length;
+      const invalidDomains = data.results.filter(r => !r.valid).length;
+      
+      if (validDomains > 0 && invalidDomains > 0) {
+        toast(`${validDomains} valid, ${invalidDomains} invalid domains`);
+      } else if (validDomains > 0) {
+        toast(`${validDomains} valid domains found!`);
+      } else {
+        toast(`${invalidDomains} invalid domains found`);
+      }
+
+    } catch (error) {
+      console.error("Domain check error:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to check domains");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Debounced domain checking
+  useEffect(() => {
+    if (debounceTimeout) {
+      clearTimeout(debounceTimeout);
+    }
+
+    if (domains.trim() && !showResults) {
+      const timeoutId = setTimeout(() => {
+        checkDomains();
+      }, 1000);
+      setDebounceTimeout(timeoutId);
+    }
+
+    return () => {
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
+    };
+  }, [domains, showResults]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [domains]);
+
+  // Get status icon and color
+  const getStatusInfo = (result: DomainResult) => {
+    if (result.status === "error") {
+      return {
+        icon: XCircle,
+        color: "text-red-500",
+        bgColor: "bg-red-50 dark:bg-red-900/20",
+        borderColor: "border-red-200 dark:border-red-800",
+      };
+    }
+
+    if (!result.valid) {
+      return {
+        icon: XCircle,
+        color: "text-red-500",
+        bgColor: "bg-red-50 dark:bg-red-900/20",
+        borderColor: "border-red-200 dark:border-red-800",
+      };
+    }
+
+    if (result.warnings && result.warnings.length > 0) {
+      return {
+        icon: AlertTriangle,
+        color: "text-yellow-500",
+        bgColor: "bg-yellow-50 dark:bg-yellow-900/20",
+        borderColor: "border-yellow-200 dark:border-yellow-800",
+      };
+    }
+
+    return {
+      icon: CheckCircle,
+      color: "text-green-500",
+      bgColor: "bg-green-50 dark:bg-green-900/20",
+      borderColor: "border-green-200 dark:border-green-800",
+    };
+  };
+
+  // Get score color
+  const getScoreColor = (score?: number) => {
+    if (!score) return "text-gray-500";
+    if (score >= 90) return "text-green-600";
+    if (score >= 70) return "text-yellow-600";
+    return "text-red-600";
+  };
+
+  const clearResults = () => {
+    setResults([]);
+    setShowResults(false);
+  };
+
+  return (
+    <div className="w-full max-w-4xl mx-auto space-y-6">
+      {/* Input Section */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+        <div className="space-y-4">
+          <div>
+            <label htmlFor="domains" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Enter domains (one per line or comma-separated)
+            </label>
+            <textarea
+              ref={textareaRef}
+              id="domains"
+              value={domains}
+              onChange={(e) => setDomains(e.target.value)}
+              placeholder="example.com&#10;google.com&#10;github.com"
+              className="w-full min-h-[120px] p-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+            />
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {parseDomains(domains).length} domain{parseDomains(domains.length !== 1 ? "s" : "")} entered
+              {parseDomains(domains).length > 50 && " (max 50 allowed)"}
+            </p>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={checkDomains}
+              disabled={loading || !domains.trim()}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors duration-200 flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="animate-spin h-4 w-4" />
+                  Checking...
+                </>
+              ) : (
+                <>
+                  <Globe className="h-4 w-4" />
+                  Check Domains
+                </>
+              )}
+            </button>
+
+            {showResults && (
+              <button
+                onClick={clearResults}
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-200"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
