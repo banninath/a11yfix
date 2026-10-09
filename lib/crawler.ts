@@ -420,7 +420,12 @@ export async function crawlUrl(
   const discoveredLinks: DiscoveredLink[] = [];
 
   try {
-    browser = await chromium.launch({ headless: true });
+    try {
+      browser = await chromium.launch({ headless: true });
+    } catch (error) {
+      console.error("[A11yFix] website crawler browser launch failed:", error);
+      throw error;
+    }
     const context = await browser.newContext();
     const page = await context.newPage();
     await page.route("**/*", async (route) => {

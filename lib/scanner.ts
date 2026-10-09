@@ -1,5 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { chromium } from "playwright";
+import type { Browser } from "playwright";
 import { validatePublicHttpUrl } from "@/lib/urlSecurity";
 import type {
   AxeRuleNode,
@@ -220,7 +221,13 @@ async function scanWithPage(
   if (isUrl) {
     await validatePublicHttpUrl(htmlOrUrl);
   }
-  const browser = await chromium.launch({ headless: true });
+  let browser: Browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch (error) {
+    console.error("[A11yFix] /api/scan browser launch failed:", error);
+    throw error;
+  }
 
   try {
     const context = await browser.newContext();
